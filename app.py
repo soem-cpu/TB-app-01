@@ -38,46 +38,66 @@ if data_file and rules_file:
         st.dataframe(df_preview.head())
 
     # Apply rules
-    try:
-        results = rules_module.check_rules(data_file)
-        excel_output = io.BytesIO()
-        sheet_count = 0
+try:
+    results = rules_module.check_rules(data_file)
+    excel_output = io.BytesIO()
 
-        # Prepare multi-sheet Excel file
+    if isinstance(results, dict):
+        # --- Summary ---
+        st.markdown("## 📋 Summary of Findings")
+        summary_data = []
+        for sheet_name, df in results.items():
+            if isinstance(df, pd.DataFrame):
+                issues = df["Comment"].astype(str).ne("").sum() if "Comment" in df.columns else 0
+                total_rows = len(df)
+                summary_data.append({
+                    "Sheet": sheet_name,
+                    "Total Rows": total_rows,
+                    "Findings": issues
+                })
+        if summary_data:
+            st.dataframe(pd.DataFrame(summary_data))
+
+        # --- Tabs for results ---
+        tabs = st.tabs(list(results.keys()))
         with pd.ExcelWriter(excel_output, engine='xlsxwriter') as writer:
-            if isinstance(results, dict):
-                st.markdown("## Validation Results:")
-                for k, v in results.items():
-                    st.write(f"**{k}**")
-                    if isinstance(v, pd.DataFrame):
-                        if not v.empty:
-                            st.dataframe(v)
+            for i, (sheet_name, df) in enumerate(results.items()):
+                with tabs[i]:
+                    st.markdown(f"### {sheet_name}")
+                    if isinstance(df, pd.DataFrame):
+                        if df.empty:
+                            st.success("✅ No issues found!")
                         else:
-                            st.success(f"No issues found in {k}!")
-                        v.to_excel(writer, index=False, sheet_name=k[:31])  # Excel sheet names max 31 chars
-                        sheet_count += 1
+                            st.dataframe(df)
+                        df.to_excel(writer, index=False, sheet_name=sheet_name[:31])
                     else:
-                        st.write(v)
-            elif isinstance(results, pd.DataFrame):
-                if results.empty:
-                    st.success("✅ No validation issues found!")
-                else:
-                    st.write("Validation results:")
-                    st.dataframe(results)
-                results.to_excel(writer, index=False, sheet_name="Validation")
-                sheet_count += 1
-            else:
-                st.write(results)
+                        st.write(df)
 
-        if sheet_count > 0:
-            st.download_button(
-                label="Download ALL Results as Excel (multi-sheet)",
-                data=excel_output.getvalue(),
-                file_name="all_results.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-    except Exception as e:
-        st.error(f"Error running rules: {e}")
+    elif isinstance(results, pd.DataFrame):
+        st.markdown("## 📋 Summary of Findings")
+        findings = results["Comment"].astype(str).ne("").sum() if "Comment" in results.columns else 0
+        st.metric("Total Findings", findings)
+
+        st.markdown("## Validation Results")
+        if results.empty:
+            st.success("✅ No validation issues found!")
+        else:
+            st.dataframe(results)
+
+        with pd.ExcelWriter(excel_output, engine='xlsxwriter') as writer:
+            results.to_excel(writer, index=False, sheet_name="Validation")
+
+    # --- Download button ---
+    st.download_button(
+        label="📥 Download ALL Results as Excel (multi-sheet)",
+        data=excel_output.getvalue(),
+        file_name="all_results.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+except Exception as e:
+    st.error(f"❌ Error running rules: {e}")
+
 
 st.markdown("---")
 st.markdown("Created with Streamlit")
