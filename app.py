@@ -1,199 +1,166 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import importlib.util
-import io
 import tempfile
 import os
+import io
 import traceback
 
 st.set_page_config(page_title="Dynamic Rule-Based Data Verification", layout="wide")
-st.title("📊 Dynamic Rule-Based Data Verification App")
+st.title("📊 Dynamic Rule-Based Data Verification (Step 1)")
 
 st.markdown(
     """
-Upload your **Python rules file** and the **Excel/CSV file** you want to verify.
-The app dynamically loads the rules file and runs `check_rules(...)`.  
-You will see a summary of findings, per-sheet tabs, and a downloadable multi-sheet Excel.
+This app loads a **rules .py** file (must provide `check_rules(excel_file)`), and an **Excel/CSV** file to validate.
+Step 1: load rules, preview data, run validation, show a compact summary of findings.
+After you confirm this works we will add tabs, row highlighting, charts and downloads.
 """
 )
 
-# -------------------- Upload rules file (.py) --------------------
-rules_file = st.file_uploader("Upload your Python rules file (.py)", type=["py"])
-
-rules_module = None
-rules_temp_path = None
-if rules_file:
-    # write to a temporary file then import
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".py")
+# --------------------- Helpers ---------------------
+def safe_import_pyfile(uploaded_file) -> tuple:
+    """
+    Save uploaded .py to a temp file and import it as a module.
+    Returns (module, temp_path) or (None, None) on failure.
+    """
     try:
-        tmp.write(rules_file.getbuffer())
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".py")
+        tmp.write(uploaded_file.getbuffer())
         tmp.flush()
         tmp.close()
-        rules_temp_path = tmp.name
-
-        # load module from the temp file
-        spec = importlib.util.spec_from_file_location("rules_module", rules_temp_path)
-        rules_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(rules_module)
-        st.success("✅ Rules file loaded!")
+        spec = importlib.util.spec_from_file_location("rules_module", tmp.name)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module, tmp.name
     except Exception as e:
-        st.error(f"Failed to load rules file: {e}")
-        st.code(traceback.format_exc())
         # cleanup
         try:
-            os.unlink(rules_temp_path)
+            tmp_name = tmp.name
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
         except Exception:
             pass
-        rules_module = None
+        raise
 
-# -------------------- Upload data file --------------------
-data_file = st.file_uploader("Upload Excel (.xlsx) or CSV (.csv) to verify", type=["xlsx", "csv"])
-
-# small helper for counting findings (works even when Comment missing)
-def count_findings_in_df(df):
+def count_findings_in_df(df: pd.DataFrame) -> int:
+    """Count rows that contain any non-empty 'Comment' (preferred) or any Error/Check columns."""
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return 0
-    # prefer Comment column if it exists
     if "Comment" in df.columns:
         return df["Comment"].astype(str).str.strip().ne("").sum()
-    # fallback: any column that looks like error/duplicate/_check
-    error_cols = [c for c in df.columns if ("Error" in c or "Duplicate" in c or c.lower().endswith("_check"))]
-    if not error_cols:
+    # fallback to _Error / Duplicate / _check
+    cand = [c for c in df.columns if ("Error" in c or "Duplicate" in c or c.lower().endswith("_check"))]
+    if not cand:
         return 0
-    mask = df[error_cols].astype(str).apply(lambda col: col.str.strip() != "")
-    return (mask.any(axis=1)).sum()
+    mask = df[cand].astype(str).apply(lambda col: col.str.strip() != "")
+    return mask.any(axis=1).sum()
 
-# -------------------- Run rules and display results --------------------
-if data_file and rules_module:
-    # Preview
-    st.markdown("### Preview of uploaded data")
+# --------------------- Upload rules ---------------------
+st.header("1) Upload rules (.py)")
+rules_file = st.file_uploader("Upload your Python rules file (must define check_rules)", type=["py"], key="rules_uploader")
+
+if rules_file:
     try:
-        if getattr(data_file, "name", "").lower().endswith(".xlsx"):
+        module, module_path = safe_import_pyfile(rules_file)
+        st.session_state["rules_module"] = module
+        st.session_state["rules_module_path"] = module_path
+        st.success("✅ Rules file loaded and module imported.")
+        # show a short info about check_rules presence
+        if hasattr(module, "check_rules") and callable(module.check_rules):
+            st.info("Module exposes `check_rules(...)` — ready to run.")
+        else:
+            st.warning("Module loaded but `check_rules` function not found. The rules file must expose a callable `check_rules(excel_file)`.")
+    except Exception as e:
+        st.error("Failed to load rules file. See details below.")
+        st.code(traceback.format_exc())
+        st.session_state.pop("rules_module", None)
+        st.session_state.pop("rules_module_path", None)
+
+# --------------------- Upload data ---------------------
+st.header("2) Upload data (.xlsx or .csv)")
+data_file = st.file_uploader("Upload Excel (.xlsx) or CSV (.csv) to validate", type=["xlsx", "csv"], key="data_uploader")
+
+df_preview = None
+if data_file:
+    try:
+        if data_file.name.lower().endswith(".xlsx"):
             xls = pd.ExcelFile(data_file)
-            preview_sheet = xls.sheet_names[0]
-            df_preview = xls.parse(preview_sheet)
-            st.write(f"First sheet: **{preview_sheet}**")
-            st.dataframe(df_preview.head())
+            first_sheet = xls.sheet_names[0]
+            df_preview = xls.parse(first_sheet)
+            st.write(f"Preview of first sheet: **{first_sheet}**")
+            st.dataframe(df_preview.head(10))
         else:
             df_preview = pd.read_csv(data_file)
-            st.dataframe(df_preview.head())
+            st.write("Preview (CSV):")
+            st.dataframe(df_preview.head(10))
     except Exception as e:
-        st.error(f"Could not preview data file: {e}")
+        st.error(f"Could not read data file: {e}")
         st.code(traceback.format_exc())
 
-    # Validate presence of check_rules
-    if not hasattr(rules_module, "check_rules") or not callable(rules_module.check_rules):
-        st.error("The uploaded rules file does not expose a callable `check_rules(excel_file)` function.")
+# --------------------- Run validation ---------------------
+st.header("3) Run validation")
+run_col1, run_col2 = st.columns([1,3])
+run_button = run_col1.button("▶️ Run validation", disabled=("rules_module" not in st.session_state or data_file is None))
+
+if run_button:
+    if "rules_module" not in st.session_state:
+        st.error("No rules module loaded. Please upload a rules .py file first.")
+    elif data_file is None:
+        st.error("No data file uploaded. Please upload Excel or CSV file to validate.")
     else:
-        run_button = st.button("Run validation")
-        if run_button:
-            try:
-                with st.spinner("Running rules..."):
-                    # call user's check_rules - pass the uploaded file-like object
-                    results = rules_module.check_rules(data_file)
-            except Exception as e:
-                st.error(f"❌ Error running rules: {e}")
-                st.code(traceback.format_exc())
+        # Run check_rules and show summary
+        try:
+            with st.spinner("Running check_rules..."):
+                # pass the uploaded file object directly (most of your functions use pd.ExcelFile which accepts file-like)
+                results = st.session_state["rules_module"].check_rules(data_file)
+        except Exception as e:
+            st.error("Error while running rules. See traceback for details.")
+            st.code(traceback.format_exc())
+            results = None
+
+        if results is not None:
+            # normalize results to dict of DataFrames
+            if isinstance(results, pd.DataFrame):
+                results = {"Validation": results}
+            elif not isinstance(results, dict):
+                st.warning("Rules returned a non-dict/non-DataFrame result — displaying raw output.")
+                st.write(results)
                 results = None
 
-            if results is None:
-                st.warning("No results returned.")
-            else:
-                # Normalize results into dict of DataFrames
-                if isinstance(results, pd.DataFrame):
-                    results = {"Validation": results}
-                elif not isinstance(results, dict):
-                    st.write("Results (not a DataFrame/dict):")
-                    st.write(results)
-                    results = None
+            if results:
+                # Build and show summary table quickly
+                summary = []
+                for sheet_name, df in results.items():
+                    if isinstance(df, pd.DataFrame):
+                        total = len(df)
+                        found = count_findings_in_df(df)
+                    else:
+                        total = 0
+                        found = 0
+                    summary.append({"Sheet": sheet_name, "Total Rows": total, "Findings": found})
+                summary_df = pd.DataFrame(summary).sort_values("Findings", ascending=False).reset_index(drop=True)
+                st.markdown("### 📋 Summary of Findings")
+                st.dataframe(summary_df)
 
-                if results:
-                    # Build summary
-                    summary_rows = []
-                    for sheet_name, df in results.items():
-                        if isinstance(df, pd.DataFrame):
-                            total_rows = len(df)
-                            findings = count_findings_in_df(df)
+                # Show small per-sheet previews (first 10 rows); we will expand later with tabs
+                st.markdown("### 🔎 Per-sheet preview")
+                for sheet_name, df in results.items():
+                    st.subheader(sheet_name)
+                    if isinstance(df, pd.DataFrame):
+                        if df.empty:
+                            st.success("No issues found in this sheet!")
                         else:
-                            total_rows = 0
-                            findings = 0
-                        summary_rows.append({"Sheet": sheet_name, "Total Rows": total_rows, "Findings": findings})
+                            # show up to first 10 rows (optionally filtered later)
+                            with st.expander(f"Show up to 200 rows of {sheet_name} (first 10 shown)"):
+                                st.dataframe(df.head(200))
+                    else:
+                        st.write(df)
 
-                    st.markdown("## 📋 Summary of Findings")
-                    summary_df = pd.DataFrame(summary_rows).sort_values(by="Findings", ascending=False).reset_index(drop=True)
-                    st.dataframe(summary_df)
-
-                    # show metrics for top-level totals
-                    total_findings = summary_df["Findings"].sum()
-                    total_rows = summary_df["Total Rows"].sum()
-                    cols = st.columns(3)
-                    cols[0].metric("Sheets", len(summary_df))
-                    cols[1].metric("Total rows (all sheets)", int(total_rows))
-                    cols[2].metric("Total findings (all sheets)", int(total_findings))
-
-                    # Tabs for each sheet
-                    st.markdown("---")
-                    st.markdown("## 🔎 Detailed Results (per sheet)")
-                    sheet_names = list(results.keys())
-                    tabs = st.tabs(sheet_names)
-                    for i, sheet_name in enumerate(sheet_names):
-                        with tabs[i]:
-                            df = results[sheet_name]
-                            if isinstance(df, pd.DataFrame):
-                                st.markdown(f"### {sheet_name}")
-                                r_cols = st.columns([1, 1, 3])
-                                r_cols[0].write(f"Rows: **{len(df)}**")
-                                r_cols[1].write(f"Findings: **{count_findings_in_df(df)}**")
-                                show_only = r_cols[2].checkbox("Show only rows with findings", key=f"only_{sheet_name}")
-
-                                # If user asked to show only findings, filter
-                                display_df = df
-                                if show_only:
-                                    if "Comment" in df.columns:
-                                        display_df = df[df["Comment"].astype(str).str.strip() != ""].copy()
-                                    else:
-                                        error_cols = [c for c in df.columns if ("Error" in c or "Duplicate" in c or c.lower().endswith("_check"))]
-                                        if error_cols:
-                                            mask = df[error_cols].astype(str).apply(lambda col: col.str.strip() != "")
-                                            display_df = df[mask.any(axis=1)].copy()
-                                        else:
-                                            display_df = df.iloc[0:0]  # empty
-
-                                if display_df.empty:
-                                    st.success("✅ No items to show (no findings).")
-                                else:
-                                    # use an expander for big tables
-                                    with st.expander(f"Show table ({len(display_df)} rows)"):
-                                        st.dataframe(display_df)
-
-                            else:
-                                st.write(f"Sheet '{sheet_name}' is not a DataFrame:")
-                                st.write(df)
-
-                    # Prepare download: multi-sheet excel
-                    excel_output = io.BytesIO()
-                    try:
-                        with pd.ExcelWriter(excel_output, engine="xlsxwriter") as writer:
-                            for sheet_name, df in results.items():
-                                if isinstance(df, pd.DataFrame):
-                                    # Excel sheet names max 31 chars
-                                    safe_name = sheet_name[:31]
-                                    df.to_excel(writer, index=False, sheet_name=safe_name)
-                                else:
-                                    # put textual representation into a sheet
-                                    tmp_df = pd.DataFrame({"Value": [str(df)]})
-                                    tmp_df.to_excel(writer, index=False, sheet_name=sheet_name[:31])
-                            writer.save()
-                        st.download_button(
-                            label="📥 Download ALL Results as Excel (multi-sheet)",
-                            data=excel_output.getvalue(),
-                            file_name="all_results.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
-                    except Exception as e:
-                        st.error(f"Failed to prepare download file: {e}")
-                        st.code(traceback.format_exc())
+                # store results in session_state for next steps (tabs, downloads in future)
+                st.session_state["last_results"] = results
+                st.success("Validation finished and results stored in session state.")
 
 # footer
 st.markdown("---")
-st.markdown("Created with Streamlit")
+st.markdown("Next: after you confirm this works, I'll add: tabs, highlighted rows, downloadable multi-sheet Excel, and charts.")
