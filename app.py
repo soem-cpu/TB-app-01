@@ -38,65 +38,69 @@ if data_file and rules_file:
         st.dataframe(df_preview.head())
 
     # Apply rules
-try:
-    results = rules_module.check_rules(data_file)
-    excel_output = io.BytesIO()
 
-    if isinstance(results, dict):
-        # --- Summary ---
-        st.markdown("## 📋 Summary of Findings")
-        summary_data = []
-        for sheet_name, df in results.items():
-            if isinstance(df, pd.DataFrame):
-                issues = df["Comment"].astype(str).ne("").sum() if "Comment" in df.columns else 0
-                total_rows = len(df)
-                summary_data.append({
-                    "Sheet": sheet_name,
-                    "Total Rows": total_rows,
-                    "Findings": issues
-                })
-        if summary_data:
-            st.dataframe(pd.DataFrame(summary_data))
+if data_file and rules_file:
+    # Preview logic ...
 
-        # --- Tabs for results ---
-        tabs = st.tabs(list(results.keys()))
-        with pd.ExcelWriter(excel_output, engine='xlsxwriter') as writer:
-            for i, (sheet_name, df) in enumerate(results.items()):
-                with tabs[i]:
-                    st.markdown(f"### {sheet_name}")
-                    if isinstance(df, pd.DataFrame):
-                        if df.empty:
-                            st.success("✅ No issues found!")
+    try:
+        results = rules_module.check_rules(data_file)
+        excel_output = io.BytesIO()
+
+        if isinstance(results, dict):
+            # --- Summary ---
+            st.markdown("## 📋 Summary of Findings")
+            summary_data = []
+            for sheet_name, df in results.items():
+                if isinstance(df, pd.DataFrame):
+                    issues = df["Comment"].astype(str).ne("").sum() if "Comment" in df.columns else 0
+                    total_rows = len(df)
+                    summary_data.append({
+                        "Sheet": sheet_name,
+                        "Total Rows": total_rows,
+                        "Findings": issues
+                    })
+            if summary_data:
+                st.dataframe(pd.DataFrame(summary_data))
+
+            # --- Tabs for results ---
+            tabs = st.tabs(list(results.keys()))
+            with pd.ExcelWriter(excel_output, engine='xlsxwriter') as writer:
+                for i, (sheet_name, df) in enumerate(results.items()):
+                    with tabs[i]:
+                        st.markdown(f"### {sheet_name}")
+                        if isinstance(df, pd.DataFrame):
+                            if df.empty:
+                                st.success("✅ No issues found!")
+                            else:
+                                st.dataframe(df)
+                            df.to_excel(writer, index=False, sheet_name=sheet_name[:31])
                         else:
-                            st.dataframe(df)
-                        df.to_excel(writer, index=False, sheet_name=sheet_name[:31])
-                    else:
-                        st.write(df)
+                            st.write(df)
 
-    elif isinstance(results, pd.DataFrame):
-        st.markdown("## 📋 Summary of Findings")
-        findings = results["Comment"].astype(str).ne("").sum() if "Comment" in results.columns else 0
-        st.metric("Total Findings", findings)
+        elif isinstance(results, pd.DataFrame):
+            st.markdown("## 📋 Summary of Findings")
+            findings = results["Comment"].astype(str).ne("").sum() if "Comment" in results.columns else 0
+            st.metric("Total Findings", findings)
 
-        st.markdown("## Validation Results")
-        if results.empty:
-            st.success("✅ No validation issues found!")
-        else:
-            st.dataframe(results)
+            st.markdown("## Validation Results")
+            if results.empty:
+                st.success("✅ No validation issues found!")
+            else:
+                st.dataframe(results)
 
-        with pd.ExcelWriter(excel_output, engine='xlsxwriter') as writer:
-            results.to_excel(writer, index=False, sheet_name="Validation")
+            with pd.ExcelWriter(excel_output, engine='xlsxwriter') as writer:
+                results.to_excel(writer, index=False, sheet_name="Validation")
 
-    # --- Download button ---
-    st.download_button(
-        label="📥 Download ALL Results as Excel (multi-sheet)",
-        data=excel_output.getvalue(),
-        file_name="all_results.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        # --- Download button ---
+        st.download_button(
+            label="📥 Download ALL Results as Excel (multi-sheet)",
+            data=excel_output.getvalue(),
+            file_name="all_results.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
-except Exception as e:
-    st.error(f"❌ Error running rules: {e}")
+    except Exception as e:
+        st.error(f"❌ Error running rules: {e}")    
 
 
 st.markdown("---")
