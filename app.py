@@ -59,7 +59,18 @@ if rules_file:
 # Upload Data File
 # =========================
 st.subheader("📥 Step 2: Upload Data File")
-data_file = st.file_uploader("Upload Excel/CSV dataset", type=["xlsx", "csv"])
+data_file = st.file_uploader("Upload Excel file to verify", type=["xlsx", "csv"])
+if data_file and rules_file:
+    # Preview logic
+    if data_file.name.endswith("xlsx"):
+        try:
+            xls = pd.ExcelFile(data_file, engine="openpyxl")  # 👈 force openpyxl
+            preview_sheet = xls.sheet_names[0]
+            df_preview = xls.parse(preview_sheet, engine="openpyxl")
+            st.write(f"Preview of uploaded data (first sheet: {preview_sheet}):")
+            st.dataframe(df_preview.head())
+        except Exception as e:
+            st.error(f"Could not preview Excel file: {e}")
 
 # =========================
 # Run Rules if Both Uploaded
