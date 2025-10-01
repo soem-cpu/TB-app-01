@@ -2,10 +2,9 @@ import streamlit as st
 import pandas as pd
 import importlib.util
 import io
-from PIL import Image
 
 # =========================
-# 🔹 Page Config
+# Page Config
 # =========================
 st.set_page_config(
     page_title="TB Data Verification",
@@ -14,11 +13,14 @@ st.set_page_config(
 )
 
 # =========================
-# 🔹 Sidebar with Logo / Image
+# Sidebar
 # =========================
 with st.sidebar:
-    st.image("https://www.who.int/images/default-source/imported/tuberculosis.jpg", 
-             caption="Stop TB Initiative", use_container_width=True)
+    st.image(
+        "https://www.who.int/images/default-source/imported/tuberculosis.jpg", 
+        caption="Stop TB Initiative", 
+        use_container_width=True
+    )
     st.markdown("### 📌 Instructions")
     st.markdown("""
     1. Upload **Rules file (.py)**
@@ -27,22 +29,23 @@ with st.sidebar:
     4. Download corrected file
     """)
     st.markdown("---")
-    st.info("💡 Tip: Ensure your rules file and dataset follow the same column names.")
+    st.info("💡 Make sure the dataset column names match the rules file.")
 
 # =========================
-# 🔹 Main Title & Description
+# Title & Description
 # =========================
 st.title("🩺 Tuberculosis Data Verification System")
 st.markdown("""
-This tool allows **rule-based validation** of TB datasets.  
-Upload your **Python rules file** and your **Excel dataset** to generate a **multi-sheet Excel report** with identified issues.
+Upload your **Python rules file** and a **dataset (Excel/CSV)**.  
+This tool applies dynamic validation rules and returns a downloadable Excel report.
 """)
 
 # =========================
-# 🔹 Upload Rules File
+# Upload Rules File
 # =========================
 st.subheader("📥 Step 1: Upload Rules File")
-rules_file = st.file_uploader("Upload your Python rules file (.py)", type=["py"])
+rules_file = st.file_uploader("Upload Python rules file (.py)", type=["py"])
+rules_module = None
 
 if rules_file:
     with open("rules_temp.py", "wb") as f:
@@ -53,31 +56,30 @@ if rules_file:
     st.success("✅ Rules file loaded successfully!")
 
 # =========================
-# 🔹 Upload Data File
+# Upload Data File
 # =========================
 st.subheader("📥 Step 2: Upload Data File")
-data_file = st.file_uploader("Upload Excel or CSV data", type=["xlsx", "csv"])
+data_file = st.file_uploader("Upload Excel/CSV dataset", type=["xlsx", "csv"])
 
 # =========================
-# 🔹 Apply Rules if Both Files Uploaded
+# Run Rules if Both Uploaded
 # =========================
-if data_file and rules_file:
+if data_file and rules_module:
     st.subheader("👀 Step 3: Data Preview")
 
-    if data_file.name.endswith("xlsx"):
-        xls = pd.ExcelFile(data_file)
-        preview_sheet = xls.sheet_names[0]
-        df_preview = xls.parse(preview_sheet)
-        st.info(f"Preview of uploaded data (first sheet: **{preview_sheet}**)")
+    try:
+        if data_file.name.endswith("xlsx"):
+            xls = pd.ExcelFile(data_file)
+            preview_sheet = xls.sheet_names[0]
+            df_preview = xls.parse(preview_sheet)
+            st.info(f"Preview (first sheet: **{preview_sheet}**)")
+        else:
+            df_preview = pd.read_csv(data_file)
+            st.info("Preview (CSV)")
         st.dataframe(df_preview.head())
-    else:
-        df_preview = pd.read_csv(data_file)
-        st.info("Preview of uploaded CSV")
-        st.dataframe(df_preview.head())
+    except Exception as e:
+        st.error(f"❌ Could not preview data: {e}")
 
-    # =========================
-    # 🔹 Apply Rule Checks
-    # =========================
     st.subheader("🔍 Step 4: Run Rule Checks")
     try:
         results = rules_module.check_rules(data_file)
@@ -86,44 +88,36 @@ if data_file and rules_file:
 
         with pd.ExcelWriter(excel_output, engine="xlsxwriter") as writer:
             if isinstance(results, dict):
-                st.markdown("## 📑 Validation Results by Sheet")
+                st.markdown("## 📑 Validation Results")
                 for k, v in results.items():
                     st.markdown(f"### 📂 {k}")
                     if isinstance(v, pd.DataFrame):
                         if not v.empty:
                             st.dataframe(v, use_container_width=True)
                         else:
-                            st.success(f"No issues found in **{k}** ✅")
+                            st.success(f"No issues in **{k}** ✅")
                         v.to_excel(writer, index=False, sheet_name=k[:31])
                         sheet_count += 1
-                    else:
-                        st.write(v)
-
             elif isinstance(results, pd.DataFrame):
                 if results.empty:
                     st.success("✅ No validation issues found!")
                 else:
-                    st.write("Validation results:")
                     st.dataframe(results, use_container_width=True)
                 results.to_excel(writer, index=False, sheet_name="Validation")
                 sheet_count += 1
 
-        # =========================
-        # 🔹 Download Button
-        # =========================
         if sheet_count > 0:
             st.download_button(
-                label="⬇️ Download All Results (Excel)",
+                label="⬇️ Download Validation Report (Excel)",
                 data=excel_output.getvalue(),
                 file_name="TB_Validation_Results.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
-
     except Exception as e:
         st.error(f"❌ Error running rules: {e}")
 
 # =========================
-# 🔹 Footer
+# Footer
 # =========================
 st.markdown("---")
-st.caption("🔬 Developed for TB Data Quality Assurance | Powered by Streamlit")
+st.caption("🔬 TB Data Quality Assurance | Powered by Streamlit")
