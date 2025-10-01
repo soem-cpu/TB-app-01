@@ -55,6 +55,26 @@ if rules_file:
     spec.loader.exec_module(rules_module)
     st.success("✅ Rules file loaded successfully!")
 
+import openpyxl
+
+if data_file.name.endswith("xlsx"):
+    try:
+        wb = openpyxl.load_workbook(data_file)
+        preview_sheet = wb.sheetnames[0]
+        ws = wb[preview_sheet]
+
+        # Read first 10 rows manually into dataframe
+        data = [[cell.value for cell in row] for row in ws.iter_rows(min_row=1, max_row=10, values_only=True)]
+        df_preview = pd.DataFrame(data[1:], columns=data[0])  # first row as header
+
+        st.write(f"Preview of uploaded data (first sheet: {preview_sheet}):")
+        st.dataframe(df_preview.head())
+    except Exception as e:
+        st.error(f"Could not preview Excel file: {e}")
+
+
+
+
 # =========================
 # Upload Data File
 # =========================
